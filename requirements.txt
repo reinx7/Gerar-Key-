@@ -1,2 +1,23 @@
-flask
-gunicorn
+# Discord.py com suporte a slash commands
+discord.py>=2.4.1
+
+# Para tarefas assíncronas e loops
+asyncio
+
+# Para manipulação de datas
+python-dateutil
+
+# Se usar requests para alguma API ou Worker
+requests
+
+# Para criar arquivos e manipular I/O
+aiofiles
+
+# Se for usar embed mais avançado ou logs
+loguru
+
+# Para gerar chaves aleatórias ou manipular strings (já builtin, mas bom listar)
+string
+
+# Para compatibilidade geral
+typing-extensions
