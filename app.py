@@ -1,326 +1,166 @@
-from flask import Flask, request, redirect, session, render_template_string
-import sqlite3, os, random, string, smtplib
+from flask import Flask, render_template, redirect, url_for, request, flash
+from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
+from flask_wtf import FlaskForm
+from wtforms import StringField, PasswordField, SubmitField, FileField
+from wtforms.validators import DataRequired, Length, Email
+import sqlite3
+import os
+import datetime
 
 app = Flask(__name__)
-app.secret_key = "super_secret"
+app.secret_key = "supersecretkey"
 
-# ===== CONFIG =====
-PIX_KEY = "SUA_CHAVE_PIX"
-ADMIN_USER = "admin"
-ADMIN_PASS = "123"
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = "login"
 
-EMAIL = "SEUEMAIL@gmail.com"
-EMAIL_PASS = "SENHA_APP"
+DATABASE = "database.db"
 
-UPLOAD_FOLDER = "uploads"
-if not os.path.exists(UPLOAD_FOLDER):
-    os.mkdir(UPLOAD_FOLDER)
-
-# ===== DATABASE =====
-
-def db():
-    con = sqlite3.connect("database.db")
-    con.row_factory = sqlite3.Row
-    return con
-
+# ---------------- Database ----------------
 def init_db():
-    con = db()
-    cur = con.cursor()
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS users(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT,
-        email TEXT,
-        password TEXT,
-        approved INTEGER DEFAULT 0,
-        user_key TEXT
-    )
-    """)
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS payments(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        plano TEXT,
-        proof TEXT,
-        status TEXT DEFAULT 'pendente'
-    )
-    """)
-
-    con.commit()
-    con.close()
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT UNIQUE,
+                    email TEXT UNIQUE,
+                    password TEXT,
+                    plan_expire DATETIME,
+                    bot_token TEXT
+                 )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS proofs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    filename TEXT,
+                    uploaded_at DATETIME
+                 )''')
+    conn.commit()
+    conn.close()
 
 init_db()
 
-# ===== HELPERS =====
+# ---------------- User ----------------
+class User(UserMixin):
+    def __init__(self, id_, username, email, plan_expire):
+        self.id = id_
+        self.username = username
+        self.email = email
+        self.plan_expire = plan_expire
 
-def make_key():
-    return ''.join(random.choice(string.ascii_uppercase+string.digits) for _ in range(12))
+@login_manager.user_loader
+def load_user(user_id):
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute("SELECT id, username, email, plan_expire FROM users WHERE id=?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return User(*row)
+    return None
 
-def send_email(dest,key):
-    try:
-        msg=f"""Subject: SUA KEY
+# ---------------- Forms ----------------
+class RegisterForm(FlaskForm):
+    username = StringField("Usuário", validators=[DataRequired(), Length(min=3)])
+    email = StringField("Email", validators=[DataRequired(), Email()])
+    password = PasswordField("Senha", validators=[DataRequired(), Length(min=5)])
+    submit = SubmitField("Registrar")
 
-Compra aprovada!
+class LoginForm(FlaskForm):
+    email = StringField("Email", validators=[DataRequired(), Email()])
+    password = PasswordField("Senha", validators=[DataRequired()])
+    submit = SubmitField("Entrar")
 
-KEY:
-{key}
-"""
-        s=smtplib.SMTP("smtp.gmail.com",587)
-        s.starttls()
-        s.login(EMAIL,EMAIL_PASS)
-        s.sendmail(EMAIL,dest,msg)
-        s.quit()
-    except:
-        print("erro email")
-
-# ===== DESIGN INSANO =====
-
-STYLE = """
-<style>
-*{margin:0;padding:0;box-sizing:border-box;font-family:Arial;}
-body{
-background:linear-gradient(135deg,#0d1117,#111827,#0f172a);
-min-height:100vh;
-display:flex;
-justify-content:center;
-align-items:flex-start;
-padding:20px;
-color:white;
-}
-.card{
-background:rgba(20,20,35,.9);
-backdrop-filter:blur(10px);
-padding:30px;
-border-radius:18px;
-box-shadow:0 0 40px rgba(0,0,0,.6);
-width:95%;
-max-width:420px;
-margin-top:20px;
-animation:fade .4s ease;
-}
-h1,h2{margin-bottom:15px;}
-input,select{
-width:100%;
-padding:12px;
-margin:8px 0;
-border:none;
-border-radius:10px;
-background:#0b0f1a;
-color:white;
-}
-button{
-width:100%;
-padding:12px;
-border:none;
-border-radius:10px;
-background:linear-gradient(90deg,#5865f2,#7289da);
-color:white;
-font-weight:bold;
-margin-top:10px;
-cursor:pointer;
-transition:.3s;
-}
-button:hover{transform:scale(1.02);}
-img{max-width:100%;border-radius:10px;}
-a{text-decoration:none;}
-@keyframes fade{
-from{opacity:0;transform:translateY(20px);}
-to{opacity:1;transform:translateY(0);}
-}
-</style>
-"""
-
-# ===== HOME =====
-
+# ---------------- Routes ----------------
 @app.route("/")
-def home():
-    return render_template_string(STYLE+"""
-    <div class='card'>
-    <h1>🔥 Loja Oficial</h1>
-    <p>Pague via PIX:</p>
-    <h2>{{pix}}</h2>
-    <a href='/register'><button>Criar Conta</button></a>
-    <a href='/login'><button>Login</button></a>
-    </div>
-    """,pix=PIX_KEY)
+def index():
+    return redirect(url_for("login"))
 
-# ===== REGISTER =====
-
-@app.route("/register",methods=["GET","POST"])
+@app.route("/register", methods=["GET","POST"])
 def register():
-    if request.method=="POST":
-        con=db(); cur=con.cursor()
-        cur.execute("INSERT INTO users(username,email,password) VALUES(?,?,?)",
-        (request.form["u"],request.form["e"],request.form["p"]))
-        con.commit(); con.close()
-        return redirect("/login")
+    form = RegisterForm()
+    if form.validate_on_submit():
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        try:
+            c.execute("INSERT INTO users (username,email,password) VALUES (?,?,?)",
+                      (form.username.data, form.email.data, form.password.data))
+            conn.commit()
+            flash("✅ Conta criada com sucesso!", "success")
+            return redirect(url_for("login"))
+        except sqlite3.IntegrityError:
+            flash("❌ Usuário ou email já cadastrado.", "danger")
+        finally:
+            conn.close()
+    return render_template("register.html", form=form)
 
-    return render_template_string(STYLE+"""
-    <div class='card'>
-    <h2>Registro</h2>
-    <form method='post'>
-    <input name='u' placeholder='Nome'>
-    <input name='e' placeholder='Email'>
-    <input name='p' placeholder='Senha'>
-    <button>Registrar</button>
-    </form>
-    </div>
-    """)
-
-# ===== LOGIN =====
-
-@app.route("/login",methods=["GET","POST"])
+@app.route("/login", methods=["GET","POST"])
 def login():
-    if request.method=="POST":
-        con=db(); cur=con.cursor()
-        cur.execute("SELECT * FROM users WHERE email=? AND password=?",
-        (request.form["e"],request.form["p"]))
-        u=cur.fetchone(); con.close()
-        if u:
-            session["user"]=u["id"]
-            return redirect("/dashboard")
+    form = LoginForm()
+    if form.validate_on_submit():
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        c.execute("SELECT id, username, email, plan_expire, password FROM users WHERE email=?", (form.email.data,))
+        row = c.fetchone()
+        conn.close()
+        if row and row[4] == form.password.data:
+            user = User(row[0], row[1], row[2], row[3])
+            login_user(user)
+            return redirect(url_for("dashboard"))
+        else:
+            flash("❌ Credenciais inválidas", "danger")
+    return render_template("login.html", form=form)
 
-    return render_template_string(STYLE+"""
-    <div class='card'>
-    <h2>Login</h2>
-    <form method='post'>
-    <input name='e' placeholder='Email'>
-    <input name='p' placeholder='Senha'>
-    <button>Entrar</button>
-    </form>
-    </div>
-    """)
-
-# ===== USER PANEL =====
-
-@app.route("/dashboard")
+@app.route("/dashboard", methods=["GET","POST"])
+@login_required
 def dashboard():
+    if request.method == "POST":
+        token = request.form.get("bot_token")
+        plan = datetime.datetime.utcnow() + datetime.timedelta(days=1)  # 1 dia grátis
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        c.execute("UPDATE users SET bot_token=?, plan_expire=? WHERE id=?",
+                  (token, plan, current_user.id))
+        conn.commit()
+        conn.close()
+        flash("✅ Key grátis ativada e token salvo!", "success")
+    return render_template("dashboard.html", user=current_user)
 
-    if "user" not in session:
-        return redirect("/login")
+@app.route("/upload_proof", methods=["POST"])
+@login_required
+def upload_proof():
+    file = request.files.get("file")
+    if file:
+        filename = f"{current_user.id}_{datetime.datetime.utcnow().timestamp()}_{file.filename}"
+        path = os.path.join("static", "uploads")
+        os.makedirs(path, exist_ok=True)
+        file.save(os.path.join(path, filename))
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        c.execute("INSERT INTO proofs (user_id, filename, uploaded_at) VALUES (?,?,?)",
+                  (current_user.id, filename, datetime.datetime.utcnow()))
+        conn.commit()
+        conn.close()
+        flash("✅ Comprovante enviado!", "success")
+    return redirect(url_for("dashboard"))
 
-    con=db(); cur=con.cursor()
-    cur.execute("SELECT * FROM users WHERE id=?", (session["user"],))
-    u=cur.fetchone(); con.close()
-
-    if u["approved"]==1:
-        return render_template_string(STYLE+"""
-        <div class='card'>
-        <h2>✅ Aprovado</h2>
-        <p>Sua KEY foi enviada por EMAIL.</p>
-        <button onclick="alert('Aqui depois vai config do bot')">Configurar Bot</button>
-        </div>
-        """)
-
-    return render_template_string(STYLE+"""
-    <div class='card'>
-    <h2>Enviar Comprovante</h2>
-    <form action='/send' method='post' enctype='multipart/form-data'>
-    <select name='plano'>
-      <option>1 dia</option>
-      <option>7 dias</option>
-      <option>30 dias</option>
-    </select>
-    <input type='file' name='img'>
-    <button>Enviar</button>
-    </form>
-    </div>
-    """)
-
-# ===== SEND PROOF =====
-
-@app.route("/send",methods=["POST"])
-def send():
-
-    f=request.files["img"]
-    name=f.filename
-    f.save(os.path.join(UPLOAD_FOLDER,name))
-
-    con=db(); cur=con.cursor()
-    cur.execute("INSERT INTO payments(user_id,plano,proof) VALUES(?,?,?)",
-    (session["user"],request.form["plano"],name))
-    con.commit(); con.close()
-
-    return redirect("/dashboard")
-
-# ===== ADMIN LOGIN =====
-
-@app.route("/admin_login",methods=["GET","POST"])
-def admin_login():
-
-    if request.method=="POST":
-        if request.form["u"]==ADMIN_USER and request.form["p"]==ADMIN_PASS:
-            session["admin"]=True
-            return redirect("/painel_admin_hidden")
-
-    return render_template_string(STYLE+"""
-    <div class='card'>
-    <h2>Admin Login</h2>
-    <form method='post'>
-    <input name='u'>
-    <input name='p'>
-    <button>Entrar</button>
-    </form>
-    </div>
-    """)
-
-# ===== ADMIN PANEL =====
-
-@app.route("/painel_admin_hidden")
+@app.route("/admin")
+@login_required
 def admin():
+    if current_user.username != "admin":
+        flash("❌ Acesso negado", "danger")
+        return redirect(url_for("dashboard"))
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute("SELECT id, username, email, plan_expire FROM users")
+    users = c.fetchall()
+    conn.close()
+    return render_template("admin.html", users=users)
 
-    if "admin" not in session:
-        return redirect("/admin_login")
+@app.route("/logout")
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for("login"))
 
-    con=db(); cur=con.cursor()
-    cur.execute("SELECT * FROM payments WHERE status='pendente'")
-    pays=cur.fetchall()
-
-    html="<h2>PAINEL ADMIN</h2>"
-
-    for p in pays:
-        html += f"""
-        <div class='card'>
-        Plano: {p['plano']}<br>
-        <img src='/uploads/{p['proof']}'><br>
-        <a href='/approve/{p['id']}'><button>Aprovar</button></a>
-        </div>
-        """
-
-    con.close()
-    return render_template_string(STYLE+html)
-
-@app.route("/uploads/<file>")
-def up(file):
-    return app.send_static_file("../uploads/"+file)
-
-# ===== APPROVE =====
-
-@app.route("/approve/<int:i>")
-def approve(i):
-
-    con=db(); cur=con.cursor()
-
-    cur.execute("SELECT user_id FROM payments WHERE id=?", (i,))
-    uid=cur.fetchone()["user_id"]
-
-    key=make_key()
-
-    cur.execute("UPDATE users SET approved=1,user_key=? WHERE id=?",(key,uid))
-    cur.execute("UPDATE payments SET status='aprovado' WHERE id=?", (i,))
-
-    cur.execute("SELECT email FROM users WHERE id=?", (uid,))
-    email=cur.fetchone()["email"]
-
-    send_email(email,key)
-
-    con.commit(); con.close()
-
-    return redirect("/painel_admin_hidden")
-
-# ===== START =====
-
-if __name__=="__main__":
-    app.run(host="0.0.0.0",port=10000)
+if __name__ == "__main__":
+    app.run(debug=True)
