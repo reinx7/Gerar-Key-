@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8">
+<title>Dashboard</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<h1>Olá, {{ user.username }}</h1>
+<p>Plano expira em: {{ user.plan_expire }}</p>
+<form method="POST">
+    <label>Coloque o token do seu bot:</label>
+    <input type="text" name="bot_token" required>
+    <button type="submit">Ativar Bot / Key grátis</button>
+</form>
+<form action="{{ url_for('upload_proof') }}" method="POST" enctype="multipart/form-data">
+    <label>Enviar comprovante:</label>
+    <input type="file" name="file">
+    <button type="submit">Enviar</button>
+</form>
+<a href="{{ url_for('logout') }}">Logout</a>
+</body>
+</html>
