@@ -2,21 +2,24 @@ import os
 import subprocess
 import signal
 import time
+import requests
 from flask import Flask, request, jsonify, render_template_string
 from flask_cors import CORS
 from threading import Thread
 
+# Configuração do Aplicativo
 app = Flask(__name__)
 CORS(app)
 bot_process = None 
 
+# --- DESIGN DO PAINEL (VERMELHO XSSX) ---
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>XSSX CORE | RED LINE</title>
+    <title>XSSX CORE | PRODUCTION</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         :root { --bg: #080808; --red: #ff0000; --card: #111; }
@@ -35,11 +38,11 @@ HTML_PAGE = """
 </head>
 <body>
     <div class="box">
-        <h1><i class="fas fa-skull-crossbones"></i> XSSX Cloud Engine</h1>
-        <p style="text-align:center; font-size:12px; color:#666; margin-bottom:20px;">Link Direto: ticket-xssx.onrender.com</p>
+        <h1><i class="fas fa-terminal"></i> XSSX Cloud Engine</h1>
+        <p style="text-align:center; font-size:11px; color:#555; margin-bottom:20px;">Ambiente de Produção Gunicorn Ativo</p>
         
-        <input type="password" id="token" placeholder="TOKEN DO BOT">
-        <textarea id="code" placeholder="CÓDIGO PYTHON (Sem bot.run)"></textarea>
+        <input type="password" id="token" placeholder="COLE O TOKEN DO BOT AQUI">
+        <textarea id="code" placeholder="COLE O CÓDIGO DO BOT (O que te mandei antes)"></textarea>
         
         <button class="btn" onclick="iniciarInstancia()">Ligar Instância</button>
         <div id="status"></div>
@@ -51,11 +54,11 @@ HTML_PAGE = """
             const code = document.getElementById('code').value;
             const status = document.getElementById('status');
             
-            if(!token || !code) return alert("Preencha todos os campos!");
+            if(!token || !code) return alert("Preencha o Token e o Código!");
 
             status.style.display = "block";
             status.className = "info";
-            status.innerHTML = "⏳ Processando nos servidores XSSX...";
+            status.innerHTML = "⏳ Enviando requisição para os workers...";
 
             try {
                 const res = await fetch('/hospedar', {
@@ -67,14 +70,14 @@ HTML_PAGE = """
                 
                 if(data.status === 'sucesso') {
                     status.className = "success";
-                    status.innerHTML = "🚀 COMANDO ENVIADO! O Bot deve ligar em instantes.";
+                    status.innerHTML = "🚀 INSTÂNCIA INICIADA! Verifique o Discord em 10 segundos.";
                 } else {
                     status.className = "error";
                     status.innerHTML = "❌ ERRO: " + data.msg;
                 }
             } catch(e) {
                 status.className = "error";
-                status.innerHTML = "❌ FALHA NA COMUNICAÇÃO COM O RENDER";
+                status.innerHTML = "❌ FALHA NA COMUNICAÇÃO COM O CORE";
             }
         }
     </script>
@@ -96,34 +99,37 @@ def hospedar():
     if not token or not codigo:
         return jsonify({"status": "erro", "msg": "Dados incompletos!"}), 400
 
-    # 1. Matar processo anterior se existir
+    # 1. Mata o processo anterior (Bot antigo)
     if bot_process:
         try:
             os.killpg(os.getpgid(bot_process.pid), signal.SIGTERM)
         except:
             pass
 
-    # 2. Criar o arquivo do bot cliente injetando o TOKEN e o HEARTBEAT
-    # O Heartbeat ajuda o bot a não ser desconectado pelo Render
+    # 2. Escreve o arquivo final do bot injetando o Token
+    # Adicionamos um print para você ver o que acontece nos logs do Render
     script_final = f"""
 import discord
 from discord.ext import commands
-import os
+import sys
 
+print("--- INICIANDO BOT CLIENTE ---")
 {codigo}
 
 if 'bot' in locals():
     try:
         bot.run('{token}')
     except Exception as e:
-        print(f'ERRO CRÍTICO: {{e}}')
+        print(f'ERRO NO LOGIN: {{e}}', file=sys.stderr)
+else:
+    print("ERRO: A variável 'bot' não foi definida no seu código!", file=sys.stderr)
 """
 
     with open("bot_cliente.py", "w", encoding="utf-8") as f:
         f.write(script_final)
 
     try:
-        # 3. Iniciar o bot como um processo separado
+        # 3. Executa o bot como um processo filho independente
         bot_process = subprocess.Popen(
             ["python", "bot_cliente.py"],
             preexec_fn=os.setsid
@@ -132,7 +138,23 @@ if 'bot' in locals():
     except Exception as e:
         return jsonify({"status": "erro", "msg": str(e)})
 
+# --- SISTEMA DE MANUTENÇÃO (KEEP-ALIVE) ---
+def self_ping():
+    """Mantém o Render acordado"""
+    time.sleep(10) # Espera o servidor subir
+    while True:
+        try:
+            # Tenta acessar o próprio site
+            requests.get("http://localhost:8080")
+        except:
+            pass
+        time.sleep(600) # a cada 10 minutos
+
+# Inicia a thread de manutenção apenas uma vez
+Thread(target=self_ping, daemon=True).start()
+
+# O Gunicorn usará o objeto 'app' definido acima.
+# O bloco abaixo só roda se você usar 'python main.py' localmente.
 if __name__ == "__main__":
-    # Inicia o servidor na porta do Render
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
