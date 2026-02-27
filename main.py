@@ -63,4 +63,3 @@ if __name__ == "__main__":
     else:
         print("Erro: Falta o DISCORD_TOKEN nas variáveis do Render!")
         while True: pass
-            
