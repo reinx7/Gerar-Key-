@@ -1,6 +1,7 @@
 {
   "name": "keybot-hub",
   "version": "1.0.0",
+  "description": "Hub para iniciar bots Discord",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
